@@ -161,6 +161,9 @@ public:
             }
         }
 
+        // Update total attempts
+        problem.totalAttempts += problem.frozenSubmissions.size();
+
         if (becameSolved) {
             newSolved = solvedCount + 1;
             newPenalty = penaltyTime + 20 * problem.wrongAttempts + firstACTime;
@@ -317,7 +320,13 @@ public:
         problem.lastSubmissionTime = time;
         problem.lastSubmissionStatus = status;
 
-        if (isFrozen && !problem.solved) {
+        if (problem.solved) {
+            // Already solved, ignore submission
+            // But still update last submission for query
+            return;
+        }
+
+        if (isFrozen) {
             // Problem is frozen for this team
             if (!problem.isFrozen) {
                 // First submission after freeze for this problem
@@ -328,8 +337,8 @@ public:
             // Add to frozen submissions
             problem.frozenSubmissions.push_back(FrozenSubmission(status, time));
         } else {
-            // Not frozen or already solved
-            if (status == Status::ACCEPTED && !problem.solved) {
+            // Not frozen
+            if (status == Status::ACCEPTED) {
                 // First AC
                 problem.solved = true;
                 problem.firstSolveTime = time;
@@ -341,12 +350,11 @@ public:
 
                 // Mark rankings as dirty
                 markRankingsDirty();
-            } else if (!problem.solved) {
-                // Wrong submission for unsolved problem
+            } else {
+                // Wrong submission
                 problem.totalAttempts++;
                 problem.wrongAttempts++;
             }
-            // If already solved, ignore submission
         }
 
         problem.totalAttempts++;
