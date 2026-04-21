@@ -7,13 +7,13 @@
 #include <cctype>
 #include <sstream>
 #include <memory>
+#include <unordered_map>
+#include <list>
 
 using namespace std;
 
 // Constants
 const int MAX_PROBLEMS = 26;
-const int MAX_TEAMS = 10000;
-const int MAX_TIME = 100000;
 
 // Submission status enum
 enum class Status {
@@ -29,7 +29,7 @@ Status stringToStatus(const string& s) {
     if (s == "Wrong_Answer") return Status::WRONG_ANSWER;
     if (s == "Runtime_Error") return Status::RUNTIME_ERROR;
     if (s == "Time_Limit_Exceed") return Status::TIME_LIMIT_EXCEED;
-    return Status::WRONG_ANSWER; // default
+    return Status::WRONG_ANSWER;
 }
 
 // Convert Status to string
@@ -47,14 +47,13 @@ string statusToString(Status s) {
 class Team {
 public:
     string name;
-    int rank;
 
     // Problem statistics
     struct ProblemStats {
         bool solved = false;
-        int firstSolveTime = 0; // time of first AC
+        int firstSolveTime = 0;
         int wrongAttempts = 0; // wrong attempts before first AC
-        int totalAttempts = 0; // total attempts (including AC)
+        int totalAttempts = 0; // total attempts
         int frozenWrongAttempts = 0; // wrong attempts before freeze
         int frozenSubmissions = 0; // submissions after freeze
         bool isFrozen = false;
@@ -67,21 +66,44 @@ public:
     vector<ProblemStats> problems;
     int problemCount;
 
-    // Overall stats
+    // Overall stats (excluding frozen problems)
     int solvedCount = 0;
     int penaltyTime = 0;
-    vector<int> solveTimes; // times when problems were solved
+    vector<int> solveTimes; // times when problems were solved (for ranking)
+
+    // For ranking comparison
+    bool operator<(const Team& other) const {
+        // 1. More solved problems first
+        if (solvedCount != other.solvedCount) {
+            return solvedCount > other.solvedCount;
+        }
+
+        // 2. Less penalty time
+        if (penaltyTime != other.penaltyTime) {
+            return penaltyTime < other.penaltyTime;
+        }
+
+        // 3. Compare solve times (largest first)
+        size_t minSize = min(solveTimes.size(), other.solveTimes.size());
+        for (size_t i = 0; i < minSize; i++) {
+            if (solveTimes[i] != other.solveTimes[i]) {
+                return solveTimes[i] < other.solveTimes[i];
+            }
+        }
+
+        // 4. Lexicographic order of team names
+        return name < other.name;
+    }
 
     Team(const string& name, int problemCount) : name(name), problemCount(problemCount) {
         problems.resize(problemCount);
-        rank = 0;
     }
 
     // Update solve times vector for ranking comparison
     void updateSolveTimes() {
         solveTimes.clear();
         for (int i = 0; i < problemCount; i++) {
-            if (problems[i].solved) {
+            if (problems[i].solved && !problems[i].isFrozen) {
                 solveTimes.push_back(problems[i].firstSolveTime);
             }
         }
@@ -102,22 +124,6 @@ public:
             if (problems[i].isFrozen) return i;
         }
         return -1;
-    }
-
-    // Unfreeze a problem and update stats
-    bool unfreezeProblem(int problemIdx, int& newSolved, int& newPenalty) {
-        (void)newSolved; // Mark as unused for now
-        (void)newPenalty; // Mark as unused for now
-
-        if (!problems[problemIdx].isFrozen) return false;
-
-        problems[problemIdx].isFrozen = false;
-
-        // Check if any of the frozen submissions were AC
-        // We need to check if the problem is now solved
-        // For simplicity, we'll assume we track this elsewhere
-        // This is a placeholder - actual implementation needs more logic
-        return true;
     }
 };
 
@@ -140,11 +146,12 @@ private:
     int durationTime = 0;
     int problemCount = 0;
 
-    map<string, shared_ptr<Team>> teams;
+    unordered_map<string, shared_ptr<Team>> teams;
     vector<string> teamNames; // for maintaining insertion order
 
-    // For ranking
-    vector<string> rankedTeams; // teams in rank order
+    // For ranking - we maintain a sorted list of team names
+    vector<string> rankedTeams;
+    bool rankingsDirty = true; // whether rankings need to be recomputed
 
     // All submissions for query
     vector<Submission> allSubmissions;
@@ -162,8 +169,10 @@ private:
         return string(1, 'A' + idx);
     }
 
-    // Update rankings
-    void updateRankings() {
+    // Update rankings if dirty
+    void updateRankingsIfNeeded() {
+        if (!rankingsDirty) return;
+
         // Sort teams according to ranking rules
         vector<shared_ptr<Team>> teamList;
         for (const auto& name : teamNames) {
@@ -171,36 +180,24 @@ private:
         }
 
         sort(teamList.begin(), teamList.end(), [](const shared_ptr<Team>& a, const shared_ptr<Team>& b) {
-            // 1. More solved problems first
-            if (a->solvedCount != b->solvedCount) {
-                return a->solvedCount > b->solvedCount;
-            }
-
-            // 2. Less penalty time
-            if (a->penaltyTime != b->penaltyTime) {
-                return a->penaltyTime < b->penaltyTime;
-            }
-
-            // 3. Compare solve times (largest first, then second largest, etc.)
-            const auto& timesA = a->solveTimes;
-            const auto& timesB = b->solveTimes;
-            size_t minSize = min(timesA.size(), timesB.size());
-            for (size_t i = 0; i < minSize; i++) {
-                if (timesA[i] != timesB[i]) {
-                    return timesA[i] < timesB[i];
-                }
-            }
-
-            // 4. Lexicographic order of team names
-            return a->name < b->name;
+            return *a < *b;
         });
 
         // Update ranks
         rankedTeams.clear();
         for (size_t i = 0; i < teamList.size(); i++) {
-            teamList[i]->rank = i + 1;
             rankedTeams.push_back(teamList[i]->name);
         }
+
+        rankingsDirty = false;
+    }
+
+    // Mark rankings as dirty (need recomputation)
+    void markRankingsDirty() {
+        if (!isFrozen) {
+            rankingsDirty = true;
+        }
+        // During freeze, rankings don't change
     }
 
 public:
@@ -240,6 +237,13 @@ public:
             pair.second->problemCount = problemCount;
         }
 
+        // Initial ranking is by team name
+        rankedTeams = teamNames;
+        sort(rankedTeams.begin(), rankedTeams.end());
+        for (size_t i = 0; i < rankedTeams.size(); i++) {
+            // ranks are 1-based
+        }
+
         cout << "[Info]Competition starts.\n";
     }
 
@@ -264,6 +268,13 @@ public:
             // Problem is frozen for this team
             problem.isFrozen = true;
             problem.frozenSubmissions++;
+
+            // If this is an AC during freeze, we need to track it
+            // but not update stats until scroll
+            if (status == Status::ACCEPTED) {
+                // Mark that this problem has an AC in frozen submissions
+                // We'll handle this during scroll
+            }
         } else {
             // Not frozen or already solved
             if (status == Status::ACCEPTED && !problem.solved) {
@@ -276,18 +287,12 @@ public:
                 team->penaltyTime += 20 * problem.wrongAttempts + time;
                 team->updateSolveTimes();
 
-                // Update ranking if not frozen
-                if (!isFrozen) {
-                    updateRankings();
-                }
+                // Mark rankings as dirty
+                markRankingsDirty();
             } else if (!problem.solved) {
                 // Wrong submission for unsolved problem
                 problem.totalAttempts++;
-                if (!isFrozen) {
-                    problem.wrongAttempts++;
-                } else {
-                    problem.frozenWrongAttempts++;
-                }
+                problem.wrongAttempts++;
             }
             // If already solved, ignore submission
         }
@@ -296,9 +301,7 @@ public:
     }
 
     void handleFlush() {
-        if (!isFrozen) {
-            updateRankings();
-        }
+        updateRankingsIfNeeded();
         cout << "[Info]Flush scoreboard.\n";
     }
 
@@ -334,7 +337,7 @@ public:
         cout << "[Info]Scroll scoreboard.\n";
 
         // First flush to show current scoreboard
-        handleFlush();
+        updateRankingsIfNeeded();
         printScoreboard();
 
         // TODO: Implement actual scroll logic
@@ -348,7 +351,10 @@ public:
                 team->problems[i].isFrozen = false;
             }
         }
-        updateRankings();
+
+        // Recompute rankings
+        rankingsDirty = true;
+        updateRankingsIfNeeded();
 
         // Print final scoreboard
         printScoreboard();
@@ -360,13 +366,23 @@ public:
             return;
         }
 
+        updateRankingsIfNeeded();
+
         cout << "[Info]Complete query ranking.\n";
         if (isFrozen) {
             cout << "[Warning]Scoreboard is frozen. The ranking may be inaccurate until it were scrolled.\n";
         }
 
-        auto team = teams[teamName];
-        cout << team->name << " NOW AT RANKING " << team->rank << "\n";
+        // Find team's rank
+        int rank = -1;
+        for (size_t i = 0; i < rankedTeams.size(); i++) {
+            if (rankedTeams[i] == teamName) {
+                rank = i + 1; // 1-based ranking
+                break;
+            }
+        }
+
+        cout << teamName << " NOW AT RANKING " << rank << "\n";
     }
 
     void handleQuerySubmission(const string& teamName, const string& problemName,
@@ -405,9 +421,21 @@ public:
 
     // Print scoreboard
     void printScoreboard() {
+        updateRankingsIfNeeded();
+
         for (const auto& teamName : rankedTeams) {
             auto team = teams[teamName];
-            cout << team->name << " " << team->rank << " "
+
+            // Find team's rank
+            int rank = -1;
+            for (size_t i = 0; i < rankedTeams.size(); i++) {
+                if (rankedTeams[i] == teamName) {
+                    rank = i + 1;
+                    break;
+                }
+            }
+
+            cout << team->name << " " << rank << " "
                  << team->solvedCount << " " << team->penaltyTime;
 
             for (int i = 0; i < problemCount; i++) {
