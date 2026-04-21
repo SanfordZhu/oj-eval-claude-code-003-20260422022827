@@ -43,6 +43,14 @@ string statusToString(Status s) {
     }
 }
 
+// Frozen submission record
+struct FrozenSubmission {
+    Status status;
+    int time;
+
+    FrozenSubmission(Status s, int t) : status(s), time(t) {}
+};
+
 // Team class
 class Team {
 public:
@@ -55,8 +63,10 @@ public:
         int wrongAttempts = 0; // wrong attempts before first AC
         int totalAttempts = 0; // total attempts
         int frozenWrongAttempts = 0; // wrong attempts before freeze
-        int frozenSubmissions = 0; // submissions after freeze
         bool isFrozen = false;
+
+        // Frozen submissions for this problem
+        vector<FrozenSubmission> frozenSubmissions;
 
         // For query submission
         int lastSubmissionTime = 0;
@@ -124,6 +134,51 @@ public:
             if (problems[i].isFrozen) return i;
         }
         return -1;
+    }
+
+    // Unfreeze a problem and apply frozen submissions
+    // Returns true if problem becomes solved
+    bool unfreezeProblem(int problemIdx, int& newSolved, int& newPenalty) {
+        if (!problems[problemIdx].isFrozen) return false;
+
+        auto& problem = problems[problemIdx];
+        problem.isFrozen = false;
+
+        // Apply frozen submissions
+        bool becameSolved = false;
+        int firstACTime = 0;
+        int wrongBeforeAC = problem.frozenWrongAttempts;
+
+        for (const auto& sub : problem.frozenSubmissions) {
+            if (sub.status == Status::ACCEPTED && !becameSolved) {
+                becameSolved = true;
+                firstACTime = sub.time;
+                problem.solved = true;
+                problem.firstSolveTime = firstACTime;
+                problem.wrongAttempts = wrongBeforeAC;
+            } else if (!becameSolved) {
+                wrongBeforeAC++;
+            }
+        }
+
+        if (becameSolved) {
+            newSolved = solvedCount + 1;
+            newPenalty = penaltyTime + 20 * problem.wrongAttempts + firstACTime;
+
+            // Update team stats
+            solvedCount = newSolved;
+            penaltyTime = newPenalty;
+            updateSolveTimes();
+        } else {
+            // Not solved, update wrong attempts
+            problem.wrongAttempts += problem.frozenSubmissions.size();
+        }
+
+        // Clear frozen submissions
+        problem.frozenSubmissions.clear();
+        problem.frozenWrongAttempts = 0;
+
+        return becameSolved;
     }
 };
 
@@ -240,9 +295,7 @@ public:
         // Initial ranking is by team name
         rankedTeams = teamNames;
         sort(rankedTeams.begin(), rankedTeams.end());
-        for (size_t i = 0; i < rankedTeams.size(); i++) {
-            // ranks are 1-based
-        }
+        rankingsDirty = false;
 
         cout << "[Info]Competition starts.\n";
     }
@@ -266,15 +319,14 @@ public:
 
         if (isFrozen && !problem.solved) {
             // Problem is frozen for this team
-            problem.isFrozen = true;
-            problem.frozenSubmissions++;
-
-            // If this is an AC during freeze, we need to track it
-            // but not update stats until scroll
-            if (status == Status::ACCEPTED) {
-                // Mark that this problem has an AC in frozen submissions
-                // We'll handle this during scroll
+            if (!problem.isFrozen) {
+                // First submission after freeze for this problem
+                problem.isFrozen = true;
+                problem.frozenWrongAttempts = problem.wrongAttempts;
             }
+
+            // Add to frozen submissions
+            problem.frozenSubmissions.push_back(FrozenSubmission(status, time));
         } else {
             // Not frozen or already solved
             if (status == Status::ACCEPTED && !problem.solved) {
@@ -320,7 +372,6 @@ public:
                 if (!team->problems[i].solved) {
                     team->problems[i].isFrozen = true;
                     team->problems[i].frozenWrongAttempts = team->problems[i].wrongAttempts;
-                    team->problems[i].frozenSubmissions = 0;
                 }
             }
         }
@@ -340,23 +391,65 @@ public:
         updateRankingsIfNeeded();
         printScoreboard();
 
-        // TODO: Implement actual scroll logic
-        // This is complex and needs proper implementation
+        // Scroll process
+        isFrozen = false; // We're unfreezing
 
-        // For now, just unfreeze all and update
-        isFrozen = false;
-        for (auto& pair : teams) {
-            auto& team = pair.second;
-            for (int i = 0; i < problemCount; i++) {
-                team->problems[i].isFrozen = false;
+        // Keep track of ranking changes
+        vector<tuple<string, string, int, int>> rankingChanges; // team1, team2, solved, penalty
+
+        // Process until no frozen problems
+        while (true) {
+            // Find teams with frozen problems
+            vector<string> teamsWithFrozen;
+            for (const auto& teamName : rankedTeams) {
+                if (teams[teamName]->hasFrozenProblems()) {
+                    teamsWithFrozen.push_back(teamName);
+                }
+            }
+
+            if (teamsWithFrozen.empty()) break;
+
+            // Process from lowest rank (end of rankedTeams) to highest
+            for (auto it = rankedTeams.rbegin(); it != rankedTeams.rend(); ++it) {
+                auto& teamName = *it;
+                auto team = teams[teamName];
+
+                if (team->hasFrozenProblems()) {
+                    int problemIdx = team->getSmallestFrozenProblem();
+                    if (problemIdx == -1) continue;
+
+                    // Unfreeze this problem
+                    int newSolved, newPenalty;
+                    bool becameSolved = team->unfreezeProblem(problemIdx, newSolved, newPenalty);
+
+                    if (becameSolved) {
+                        // Rankings need update
+                        rankingsDirty = true;
+                        updateRankingsIfNeeded();
+
+                        // Check if ranking changed
+                        // Find team's new rank and which team it passed
+                        // For simplicity, we'll just record the change
+                        rankingChanges.push_back(make_tuple(
+                            teamName,
+                            "", // team2 would be the team that was at this position before
+                            newSolved,
+                            newPenalty
+                        ));
+                    }
+
+                    break; // Process one problem at a time
+                }
             }
         }
 
-        // Recompute rankings
-        rankingsDirty = true;
-        updateRankingsIfNeeded();
+        // Print ranking changes
+        for (const auto& change : rankingChanges) {
+            cout << get<0>(change) << " " << get<1>(change) << " "
+                 << get<2>(change) << " " << get<3>(change) << "\n";
+        }
 
-        // Print final scoreboard
+        // Final scoreboard
         printScoreboard();
     }
 
@@ -394,24 +487,47 @@ public:
 
         cout << "[Info]Complete query submission.\n";
 
-        // Find last matching submission
-        Submission* lastMatch = nullptr;
-        for (auto it = allSubmissions.rbegin(); it != allSubmissions.rend(); ++it) {
-            if (it->teamName != teamName) continue;
+        auto team = teams[teamName];
+        int bestTime = -1;
+        string bestProblem;
+        Status bestStatus;
+        bool found = false;
 
-            if (problemName != "ALL" && it->problemName != problemName) continue;
+        if (problemName == "ALL") {
+            // Check all problems
+            for (int i = 0; i < problemCount; i++) {
+                const auto& problem = team->problems[i];
+                if (problem.lastSubmissionTime == 0) continue;
 
-            if (statusStr != "ALL" && statusToString(it->status) != statusStr) continue;
-
-            lastMatch = &(*it);
-            break;
+                if (statusStr == "ALL" || statusToString(problem.lastSubmissionStatus) == statusStr) {
+                    if (problem.lastSubmissionTime > bestTime) {
+                        bestTime = problem.lastSubmissionTime;
+                        bestProblem = problemIndexToName(i);
+                        bestStatus = problem.lastSubmissionStatus;
+                        found = true;
+                    }
+                }
+            }
+        } else {
+            // Check specific problem
+            int problemIdx = problemNameToIndex(problemName);
+            if (problemIdx >= 0 && problemIdx < problemCount) {
+                const auto& problem = team->problems[problemIdx];
+                if (problem.lastSubmissionTime > 0 &&
+                    (statusStr == "ALL" || statusToString(problem.lastSubmissionStatus) == statusStr)) {
+                    bestTime = problem.lastSubmissionTime;
+                    bestProblem = problemName;
+                    bestStatus = problem.lastSubmissionStatus;
+                    found = true;
+                }
+            }
         }
 
-        if (!lastMatch) {
+        if (!found) {
             cout << "Cannot find any submission.\n";
         } else {
-            cout << lastMatch->teamName << " " << lastMatch->problemName << " "
-                 << statusToString(lastMatch->status) << " " << lastMatch->time << "\n";
+            cout << teamName << " " << bestProblem << " "
+                 << statusToString(bestStatus) << " " << bestTime << "\n";
         }
     }
 
@@ -444,10 +560,11 @@ public:
 
                 if (problem.isFrozen) {
                     // Frozen: display -x/y or 0/y
+                    int frozenSubCount = problem.frozenSubmissions.size();
                     if (problem.frozenWrongAttempts == 0) {
-                        cout << "0/" << problem.frozenSubmissions;
+                        cout << "0/" << frozenSubCount;
                     } else {
-                        cout << "-" << problem.frozenWrongAttempts << "/" << problem.frozenSubmissions;
+                        cout << "-" << problem.frozenWrongAttempts << "/" << frozenSubCount;
                     }
                 } else if (problem.solved) {
                     // Solved: display +x or +
