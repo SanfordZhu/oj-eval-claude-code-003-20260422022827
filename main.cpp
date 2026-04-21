@@ -430,10 +430,10 @@ public:
                     }
                 } else {
                     // Not solved, not frozen: display -x or .
-                    if (problem.totalAttempts == 0) {
+                    if (problem.wrongAttempts == 0) {
                         cout << ".";
                     } else {
-                        cout << "-" << problem.totalAttempts;
+                        cout << "-" << problem.wrongAttempts;
                     }
                 }
             }
@@ -479,15 +479,21 @@ public:
             handleQueryRanking(teamName);
         }
         else if (cmd == "QUERY_SUBMISSION") {
-            string teamName, where, problemEq, problemName, andStr, statusEq, statusStr;
-            iss >> teamName >> where >> problemEq >> problemName >> andStr >> statusEq >> statusStr;
-            // Remove "PROBLEM=" and "STATUS=" prefixes
+            string teamName, where, problemEq, andStr, statusEq;
+            iss >> teamName >> where >> problemEq >> andStr >> statusEq;
+
+            // Parse PROBLEM=[problem_name]
+            string problemName = "ALL";
             if (problemEq.find("PROBLEM=") == 0) {
                 problemName = problemEq.substr(8);
             }
+
+            // Parse STATUS=[status]
+            string statusStr = "ALL";
             if (statusEq.find("STATUS=") == 0) {
                 statusStr = statusEq.substr(7);
             }
+
             handleQuerySubmission(teamName, problemName, statusStr);
         }
         else if (cmd == "END") {
